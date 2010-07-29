@@ -317,14 +317,19 @@ X86RegisterInfo::getMatchingSuperRegClass(const TargetRegisterClass *A,
 
 const TargetRegisterClass *
 X86RegisterInfo::getPointerRegClass(unsigned Kind) const {
+  // @LOCALMOD-BEGIN
+  const X86Subtarget &Subtarget = TM.getSubtarget<X86Subtarget>();
+  bool is64BitPtrs = Subtarget.is64Bit() && !Subtarget.isTargetNaCl();
+  // @LOCALMOD-END
+
   switch (Kind) {
   default: llvm_unreachable("Unexpected Kind in getPointerRegClass!");
   case 0: // Normal GPRs.
-    if (TM.getSubtarget<X86Subtarget>().is64Bit())
+    if (is64BitPtrs)   // @LOCALMOD
       return &X86::GR64RegClass;
     return &X86::GR32RegClass;
   case 1: // Normal GRPs except the stack pointer (for encoding reasons).
-    if (TM.getSubtarget<X86Subtarget>().is64Bit())
+    if (is64BitPtrs)   // @LOCALMOD
       return &X86::GR64_NOSPRegClass;
     return &X86::GR32_NOSPRegClass;
   }
@@ -365,12 +370,18 @@ X86RegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
   };
 
   static const unsigned CalleeSavedRegs64Bit[] = {
-    X86::RBX, X86::R12, X86::R13, X86::R14, X86::R15, X86::RBP, 0
+    X86::RBX, X86::R12, X86::R13, X86::R14,
+    // @LOCALMOD
+    // X86::R15,
+    X86::RBP, 0
   };
 
   static const unsigned CalleeSavedRegs64EHRet[] = {
     X86::RAX, X86::RDX, X86::RBX, X86::R12,
-    X86::R13, X86::R14, X86::R15, X86::RBP, 0
+    X86::R13, X86::R14,
+    // @LOCALMOD
+    // X86::R15,
+    X86::RBP, 0
   };
 
   static const unsigned CalleeSavedRegsWin64[] = {
@@ -425,6 +436,21 @@ BitVector X86RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   Reserved.set(X86::ST5);
   Reserved.set(X86::ST6);
   Reserved.set(X86::ST7);
+
+  // @LOCALMOD-START
+  const X86Subtarget& Subtarget = MF.getTarget().getSubtarget<X86Subtarget>();
+  if (Subtarget.isTargetNaCl64()) {
+    Reserved.set(X86::R15);
+    Reserved.set(X86::R15D);
+    Reserved.set(X86::R15W);
+    Reserved.set(X86::R15B);
+    Reserved.set(X86::RBP);
+    Reserved.set(X86::EBP);
+    Reserved.set(X86::BP);
+    Reserved.set(X86::BPL);
+  }
+  // @LOCALMOD-END
+
   return Reserved;
 }
 
@@ -1153,6 +1179,8 @@ void X86RegisterInfo::emitEpilogue(MachineFunction &MF,
   default:
     llvm_unreachable("Can only insert epilog into returning blocks");
   case X86::RET:
+  case X86::NACL_RET64:
+  case X86::NACL_RET32:
   case X86::RETI:
   case X86::TCRETURNdi:
   case X86::TCRETURNri:
@@ -1160,6 +1188,12 @@ void X86RegisterInfo::emitEpilogue(MachineFunction &MF,
   case X86::TCRETURNdi64:
   case X86::TCRETURNri64:
   case X86::TCRETURNmi64:
+    // @LOCALMOD-START
+  case X86::NACL_TCRETURNdi:
+  case X86::NACL_TCRETURNri:
+  case X86::NACL_TCRETURNdi64:
+  case X86::NACL_TCRETURNri64:
+    // @LOCALMOD-END
   case X86::EH_RETURN:
   case X86::EH_RETURN64:
     break;  // These are ok
@@ -1248,7 +1282,14 @@ void X86RegisterInfo::emitEpilogue(MachineFunction &MF,
   } else if (RetOpcode == X86::TCRETURNri || RetOpcode == X86::TCRETURNdi ||
              RetOpcode == X86::TCRETURNmi ||
              RetOpcode == X86::TCRETURNri64 || RetOpcode == X86::TCRETURNdi64 ||
-             RetOpcode == X86::TCRETURNmi64) {
+             RetOpcode == X86::TCRETURNmi64 ||
+             // @LOCALMOD-START
+             RetOpcode == X86::NACL_TCRETURNri ||
+             RetOpcode == X86::NACL_TCRETURNdi ||
+             RetOpcode == X86::NACL_TCRETURNri64 ||
+             RetOpcode == X86::NACL_TCRETURNdi64
+             // @LOCALMOD-END
+             ) {
     bool isMem = RetOpcode == X86::TCRETURNmi || RetOpcode == X86::TCRETURNmi64;
     // Tail call return: adjust the stack pointer and jump to callee.
     MBBI = prior(MBB.end());
@@ -1287,6 +1328,24 @@ void X86RegisterInfo::emitEpilogue(MachineFunction &MF,
     } else if (RetOpcode == X86::TCRETURNri64) {
       BuildMI(MBB, MBBI, DL, TII.get(X86::TAILJMPr64)).
         addReg(JumpTarget.getReg(), RegState::Kill);
+// @LOCALMOD-START
+    } else if (RetOpcode == X86::NACL_TCRETURNdi ||
+               RetOpcode == X86::NACL_TCRETURNdi64) {
+      // This particular (direct jump) is currently the same across NaCl
+      // and non-NaCl targets, but a separate case is added for consistency.
+      BuildMI(MBB, MBBI, DL, TII.get((RetOpcode == X86::TCRETURNdi)
+                                     ? X86::NACL_TAILJMPd
+                                     : X86::NACL_TAILJMPd64)).
+        addGlobalAddress(JumpTarget.getGlobal(), JumpTarget.getOffset(),
+                         JumpTarget.getTargetFlags());
+    } else if (RetOpcode == X86::NACL_TCRETURNri) {
+      // These NACL indirect jumps require sandboxing.
+      BuildMI(MBB, MBBI, DL, TII.get(X86::NACL_TAILJMPr),
+              JumpTarget.getReg());
+    } else if (RetOpcode == X86::NACL_TCRETURNri64) {
+      BuildMI(MBB, MBBI, DL, TII.get(X86::NACL_TAILJMPr64),
+              JumpTarget.getReg());
+// @LOCALMOD-END
     } else {
       BuildMI(MBB, MBBI, DL, TII.get(X86::TAILJMPr)).
         addReg(JumpTarget.getReg(), RegState::Kill);
@@ -1298,8 +1357,10 @@ void X86RegisterInfo::emitEpilogue(MachineFunction &MF,
 
     // Delete the pseudo instruction TCRETURN.
     MBB.erase(MBBI);
-  } else if ((RetOpcode == X86::RET || RetOpcode == X86::RETI) &&
-             (X86FI->getTCReturnAddrDelta() < 0)) {
+  } else if ((RetOpcode == X86::RET || RetOpcode == X86::RETI ||
+              RetOpcode == X86::NACL_RET32 ||    // @LOCALMOD
+              RetOpcode == X86::NACL_RET64)      // @LOCALMOD
+             && (X86FI->getTCReturnAddrDelta() < 0)) {
     // Add the return addr area delta back since we are not tail calling.
     int delta = -1*X86FI->getTCReturnAddrDelta();
     MBBI = prior(MBB.end());

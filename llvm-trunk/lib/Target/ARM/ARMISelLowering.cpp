@@ -49,6 +49,11 @@
 #include <sstream>
 using namespace llvm;
 
+// @LOCALMOD-START
+#include "llvm/Support/CommandLine.h"
+extern cl::opt<bool> FlagSfiStore;
+// @LOCALMOD-END
+
 STATISTIC(NumTailCalls, "Number of tail calls");
 
 // This option should go away when tail calls fully work.
@@ -395,8 +400,13 @@ ARMTargetLowering::ARMTargetLowering(TargetMachine &TM)
   setOperationAction(ISD::GLOBAL_OFFSET_TABLE, MVT::i32, Custom);
   setOperationAction(ISD::GlobalTLSAddress, MVT::i32, Custom);
   setOperationAction(ISD::BlockAddress, MVT::i32, Custom);
-
+  // @LOCALMOD-START
+  if (!Subtarget->useInlineJumpTables())
+    setOperationAction(ISD::JumpTable,     MVT::i32,   Custom);
+  // @LOCALMOD-END
+  
   setOperationAction(ISD::TRAP, MVT::Other, Legal);
+
 
   // Use the default implementation.
   setOperationAction(ISD::VASTART,            MVT::Other, Custom);
@@ -492,8 +502,12 @@ ARMTargetLowering::ARMTargetLowering(TargetMachine &TM)
   setOperationAction(ISD::BR_CC,     MVT::i32,   Custom);
   setOperationAction(ISD::BR_CC,     MVT::f32,   Custom);
   setOperationAction(ISD::BR_CC,     MVT::f64,   Custom);
-  setOperationAction(ISD::BR_JT,     MVT::Other, Custom);
-
+  // @LOCALMOD-START
+  //setOperationAction(ISD::BR_JT,     MVT::Other, Custom);
+  setOperationAction(ISD::BR_JT,     MVT::Other,
+                     Subtarget->useInlineJumpTables() ? Custom : Expand);
+  // @LOCALMOD-END
+  
   // We don't support sin/cos/fmod/copysign/pow
   setOperationAction(ISD::FSIN,      MVT::f64, Expand);
   setOperationAction(ISD::FSIN,      MVT::f32, Expand);
@@ -813,8 +827,9 @@ static bool f64AssignAAPCS(unsigned &ValNo, EVT &ValVT, EVT &LocVT,
                            CCState &State, bool CanFail) {
   static const unsigned HiRegList[] = { ARM::R0, ARM::R2 };
   static const unsigned LoRegList[] = { ARM::R1, ARM::R3 };
+  static const unsigned ShadowRegList[] = { ARM::R0, ARM::R1 };
 
-  unsigned Reg = State.AllocateReg(HiRegList, LoRegList, 2);
+  unsigned Reg = State.AllocateReg(HiRegList, ShadowRegList, 2);
   if (Reg == 0) {
     // For the 2nd half of a v2f64, do not just fail.
     if (CanFail)
@@ -831,6 +846,9 @@ static bool f64AssignAAPCS(unsigned &ValNo, EVT &ValVT, EVT &LocVT,
   for (i = 0; i < 2; ++i)
     if (HiRegList[i] == Reg)
       break;
+
+  unsigned T = State.AllocateReg(LoRegList[i]);
+  assert(T == LoRegList[i] && "Could not allocate register");
 
   State.addLoc(CCValAssign::getCustomReg(ValNo, ValVT, Reg, LocVT, LocInfo));
   State.addLoc(CCValAssign::getCustomReg(ValNo, ValVT, LoRegList[i],
@@ -1645,7 +1663,13 @@ static SDValue LowerConstantPool(SDValue Op, SelectionDAG &DAG) {
 }
 
 unsigned ARMTargetLowering::getJumpTableEncoding() const {
-  return MachineJumpTableInfo::EK_Inline;
+  // @LOCALMOD-BEGIN
+  if (Subtarget->useInlineJumpTables()) { 
+    return MachineJumpTableInfo::EK_Inline;
+  } else {
+    return MachineJumpTableInfo::EK_BlockAddress;
+  }
+  // @LOCALMOD-END
 }
 
 SDValue ARMTargetLowering::LowerBlockAddress(SDValue Op,
@@ -1677,6 +1701,27 @@ SDValue ARMTargetLowering::LowerBlockAddress(SDValue Op,
   SDValue PICLabel = DAG.getConstant(ARMPCLabelIndex, MVT::i32);
   return DAG.getNode(ARMISD::PIC_ADD, DL, PtrVT, Result, PICLabel);
 }
+
+// @LOCALMOD-START
+// more conventional jumptable implementation
+SDValue ARMTargetLowering::LowerJumpTable(SDValue Op, SelectionDAG &DAG) const {
+  assert(!Subtarget->useInlineJumpTables() &&
+         "inline jump tables not custom lowered");
+  const MVT PTy = getPointerTy();
+  const JumpTableSDNode *JT = cast<JumpTableSDNode>(Op);
+  const SDValue JTI = DAG.getTargetJumpTable(JT->getIndex(), PTy);
+  const DebugLoc dl = Op.getDebugLoc();
+
+  ARMConstantPoolValue *CPV = new ARMConstantPoolValue(*DAG.getContext(),
+                                                       JT->getIndex());
+  // TODO: factor this idiom to load a value from a CP into a new function
+  const SDValue PoolEntry = DAG.getTargetConstantPool(CPV, PTy, 4);
+  const SDValue PoolWrapper = DAG.getNode(ARMISD::Wrapper, dl, PTy, PoolEntry);
+  return DAG.getLoad(PTy, dl, DAG.getEntryNode(), PoolWrapper, NULL, 0,
+                     false, false, 0);
+
+}
+// @LOCALMOD-END
 
 // Lower ISD::GlobalTLSAddress using the "general dynamic" model
 SDValue
@@ -3567,7 +3612,8 @@ SDValue ARMTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
   default: llvm_unreachable("Don't know how to custom lower this!");
   case ISD::ConstantPool:  return LowerConstantPool(Op, DAG);
   case ISD::BlockAddress:  return LowerBlockAddress(Op, DAG);
-  case ISD::GlobalAddress:
+  case ISD::JumpTable:    return LowerJumpTable(Op, DAG); // @LOCALMOD
+   case ISD::GlobalAddress:
     return Subtarget->isTargetDarwin() ? LowerGlobalAddressDarwin(Op, DAG) :
       LowerGlobalAddressELF(Op, DAG);
   case ISD::GlobalTLSAddress:   return LowerGlobalTLSAddress(Op, DAG);
@@ -5059,6 +5105,13 @@ ARMTargetLowering::getPreIndexedAddressParts(SDNode *N, SDValue &Base,
   if (Subtarget->isThumb1Only())
     return false;
 
+  // @LOCAMOD-START
+  // NOTE: THIS IS A LITTLE DRASTIC
+  if (FlagSfiStore && N->getOpcode() == ISD::STORE) {
+    return false;
+  }
+  // @LOCAMOD-END
+
   EVT VT;
   SDValue Ptr;
   bool isSEXTLoad = false;
@@ -5097,7 +5150,12 @@ bool ARMTargetLowering::getPostIndexedAddressParts(SDNode *N, SDNode *Op,
                                                    SelectionDAG &DAG) const {
   if (Subtarget->isThumb1Only())
     return false;
-
+   // @LOCALMOD-START
+  // THIS IS A LITTLE DRASTIC
+  if (FlagSfiStore && N->getOpcode() == ISD::STORE) {
+    return false;
+  }
+  // @LOCALMOD-END
   EVT VT;
   SDValue Ptr;
   bool isSEXTLoad = false;

@@ -2725,10 +2725,14 @@ void SelectionDAGBuilder::visitExtractValue(const ExtractValueInst &I) {
 void SelectionDAGBuilder::visitGetElementPtr(const User &I) {
   SDValue N = getValue(I.getOperand(0));
   const Type *Ty = I.getOperand(0)->getType();
-
+  dbgs() << "VISITING GETELEMENTPTR\n";
+  dbgs() << "N IS:\n";
+  N->dump();
   for (GetElementPtrInst::const_op_iterator OI = I.op_begin()+1, E = I.op_end();
        OI != E; ++OI) {
     const Value *Idx = *OI;
+    dbgs() << "IDX IS:\n";
+    Idx->dump();
     if (const StructType *StTy = dyn_cast<StructType>(Ty)) {
       unsigned Field = cast<ConstantInt>(Idx)->getZExtValue();
       if (Field) {
@@ -2745,10 +2749,13 @@ void SelectionDAGBuilder::visitGetElementPtr(const User &I) {
       // Offset canonically 0 for unions, but type changes
       Ty = UnTy->getElementType(Field);
     } else {
+      dbgs() << "Ty1 is:\n"; Ty->dump();
       Ty = cast<SequentialType>(Ty)->getElementType();
+      dbgs() << "Ty2 is:\n"; Ty->dump();
 
       // If this is a constant subscript, handle it quickly.
       if (const ConstantInt *CI = dyn_cast<ConstantInt>(Idx)) {
+        dbgs() << "IS A CONSTANT!\n";
         if (CI->isZero()) continue;
         uint64_t Offs =
             TD->getTypeAllocSize(Ty)*cast<ConstantInt>(CI)->getSExtValue();
@@ -2768,6 +2775,7 @@ void SelectionDAGBuilder::visitGetElementPtr(const User &I) {
       }
 
       // N = N + Idx * ElementSize;
+      dbgs() << "PointerTY is: " << TLI.getPointerTy().getSizeInBits() << "\n";
       APInt ElementSize = APInt(TLI.getPointerTy().getSizeInBits(),
                                 TD->getTypeAllocSize(Ty));
       SDValue IdxN = getValue(Idx);
@@ -2775,6 +2783,8 @@ void SelectionDAGBuilder::visitGetElementPtr(const User &I) {
       // If the index is smaller or larger than intptr_t, truncate or extend
       // it.
       IdxN = DAG.getSExtOrTrunc(IdxN, getCurDebugLoc(), N.getValueType());
+      dbgs() << "After extend, IdxN is:\n"; IdxN->dump();
+
 
       // If this is a multiply by a power of two, turn it into a shl
       // immediately.  This is a very common case.
@@ -5689,7 +5699,10 @@ void SelectionDAGBuilder::visitVAArg(const VAArgInst &I) {
   SDValue V = DAG.getVAArg(TLI.getValueType(I.getType()), getCurDebugLoc(),
                            getRoot(), getValue(I.getOperand(0)),
                            DAG.getSrcValue(I.getOperand(0)),
-                           TD.getABITypeAlignment(I.getType()));
+// @LOCALMOD-BEGIN
+                           TD.getCallFrameTypeAlignment(I.getType()));
+// @LOCALMOD-END
+
   setValue(&I, V);
   DAG.setRoot(V.getValue(1));
 }

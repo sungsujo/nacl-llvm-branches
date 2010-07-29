@@ -98,6 +98,7 @@ const char *Triple::getOSTypeName(OSType Kind) {
   case Lv2: return "lv2";
   case MinGW32: return "mingw32";
   case MinGW64: return "mingw64";
+  case NativeClient: return "nacl";
   case NetBSD: return "netbsd";
   case OpenBSD: return "openbsd";
   case Psp: return "psp";
@@ -309,13 +310,17 @@ void Triple::Parse() const {
   else if (OSName.startswith("freebsd"))
     OS = FreeBSD;
   else if (OSName.startswith("linux"))
-    OS = Linux;
+    // TODO(pdox): Fix this when we stop using target linux
+    OS = NativeClient; // @LOCALMOD
+//    OS = Linux;
   else if (OSName.startswith("lv2"))
     OS = Lv2;
   else if (OSName.startswith("mingw32"))
     OS = MinGW32;
   else if (OSName.startswith("mingw64"))
     OS = MinGW64;
+  else if (OSName.startswith("nacl"))
+    OS = NativeClient;
   else if (OSName.startswith("netbsd"))
     OS = NetBSD;
   else if (OSName.startswith("openbsd"))
