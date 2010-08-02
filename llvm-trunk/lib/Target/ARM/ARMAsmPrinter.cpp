@@ -975,12 +975,15 @@ void ARMAsmPrinter::printCPInstOperand(const MachineInstr *MI, int OpNum,
     //assert(size == 4 || size == 8 && "Unsupported data item size");
     if (size == 8) {
       // we cannot generate a size 8 constant at offset 12 (mod 16)
-      O << "sfi_nop_if_at_bundle_end\n";
+      OutStreamer.EmitRawText(StringRef("sfi_nop_if_at_bundle_end\n"));
     }
 
     if (FlagSfiData) {
-      O << "sfi_illegal_if_at_bundle_begining  @ ========== SFI (" <<
-        size << ")\n";
+      SmallString<128> Str;
+      raw_svector_ostream OS(Str);
+      OS << "sfi_illegal_if_at_bundle_begining  @ ========== SFI (" << 
+            size << ")\n";
+      OutStreamer.EmitRawText(OS.str());
     }
     // @LOCALMOD-END
 
