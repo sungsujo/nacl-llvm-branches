@@ -392,9 +392,7 @@ X86TargetLowering::X86TargetLowering(X86TargetMachine &TM)
   setOperationAction(ISD::EHSELECTION,   MVT::i64, Expand);
   setOperationAction(ISD::EXCEPTIONADDR, MVT::i32, Expand);
   setOperationAction(ISD::EHSELECTION,   MVT::i32, Expand);
-  // @LOCALMOD
-  // NaCl uses 32-bit pointers, so use 32-bit registers for EH-related pointers.
-  if (Subtarget->is64Bit() && !Subtarget->isTargetNaCl()) {
+  if (Subtarget->has64BitPointers()) {
     setExceptionPointerRegister(X86::RAX);
     setExceptionSelectorRegister(X86::RDX);
   } else {
@@ -7262,7 +7260,7 @@ SDValue X86TargetLowering::LowerFRAMEADDR(SDValue Op, SelectionDAG &DAG) const {
   EVT VT = Op.getValueType();
   DebugLoc dl = Op.getDebugLoc();  // FIXME probably not meaningful
   unsigned Depth = cast<ConstantSDNode>(Op.getOperand(0))->getZExtValue();
-  unsigned FrameReg = Subtarget->is64Bit() ? X86::RBP : X86::EBP;
+  unsigned FrameReg = Subtarget->has64BitPointers() ? X86::RBP : X86::EBP;
   SDValue FrameAddr = DAG.getCopyFromReg(DAG.getEntryNode(), dl, FrameReg, VT);
   while (Depth--)
     FrameAddr = DAG.getLoad(VT, dl, DAG.getEntryNode(), FrameAddr, NULL, 0,

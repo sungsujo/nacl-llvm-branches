@@ -288,6 +288,14 @@ namespace {
       return getTargetMachine().getInstrInfo();
     }
 
+    // @LOCALMOD-START
+    bool selectingMemOp;
+    bool RestrictUseOfBaseReg() {
+      return selectingMemOp && Subtarget->isTargetNaCl64();
+    }
+    // @LOCALMOD-END
+
+
   };
 }
 
@@ -670,6 +678,7 @@ bool X86DAGToDAGISel::MatchAddress(SDValue N, X86ISelAddressMode &AM) {
     return true;
 
 
+  if (!RestrictUseOfBaseReg()) {   // @LOCALMOD
   // Post-processing: Convert lea(,%reg,2) to lea(%reg,%reg), which has
   // a smaller encoding and avoids a scaled-index.
   if (AM.Scale == 2 &&
@@ -678,6 +687,7 @@ bool X86DAGToDAGISel::MatchAddress(SDValue N, X86ISelAddressMode &AM) {
     AM.Base_Reg = AM.IndexReg;
     AM.Scale = 1;
   }
+  } // @LOCALMOD
   
   // Post-processing: Convert foo to foo(%rip), even in non-PIC mode,
   // because it has a smaller encoding.
@@ -830,6 +840,8 @@ bool X86DAGToDAGISel::MatchAddressRecursively(SDValue N, X86ISelAddressMode &AM,
     // FALL THROUGH
   case ISD::MUL:
   case X86ISD::MUL_IMM:
+    // @LOCALMOD
+    if (!RestrictUseOfBaseReg()) {
     // X*[3,5,9] -> X+X*[2,4,8]
     if (AM.BaseType == X86ISelAddressMode::RegBase &&
         AM.Base_Reg.getNode() == 0 &&
@@ -867,6 +879,7 @@ bool X86DAGToDAGISel::MatchAddressRecursively(SDValue N, X86ISelAddressMode &AM,
           return false;
         }
     }
+    } // @LOCALMOD
     break;
 
   case ISD::SUB: {
@@ -967,6 +980,7 @@ bool X86DAGToDAGISel::MatchAddressRecursively(SDValue N, X86ISelAddressMode &AM,
     LHS = Handle.getValue().getNode()->getOperand(0);
     RHS = Handle.getValue().getNode()->getOperand(1);
 
+    if (!RestrictUseOfBaseReg()) { // @LOCALMOD
     // If we couldn't fold both operands into the address at the same time,
     // see if we can just put each operand into a register and fold at least
     // the add.
@@ -978,6 +992,7 @@ bool X86DAGToDAGISel::MatchAddressRecursively(SDValue N, X86ISelAddressMode &AM,
       AM.Scale = 1;
       return false;
     }
+    } // @LOCALMOD
     break;
   }
 
@@ -1131,6 +1146,14 @@ bool X86DAGToDAGISel::MatchAddressRecursively(SDValue N, X86ISelAddressMode &AM,
 /// MatchAddressBase - Helper for MatchAddress. Add the specified node to the
 /// specified addressing mode without any further recursion.
 bool X86DAGToDAGISel::MatchAddressBase(SDValue N, X86ISelAddressMode &AM) {
+  if (RestrictUseOfBaseReg()) { // @LOCALMOD
+    if (AM.IndexReg.getNode() == 0) {
+      AM.IndexReg = N;
+      AM.Scale = 1;
+      return false;
+    }
+    return true;
+  } // @LOCALMOD
 // Is the base register already occupied?
   if (AM.BaseType != X86ISelAddressMode::RegBase || AM.Base_Reg.getNode()) {
     // If so, check to see if the scale index register is set.
@@ -1157,6 +1180,8 @@ bool X86DAGToDAGISel::SelectAddr(SDNode *Op, SDValue N, SDValue &Base,
                                  SDValue &Scale, SDValue &Index,
                                  SDValue &Disp, SDValue &Segment) {
   X86ISelAddressMode AM;
+  // @LOCALMOD
+  selectingMemOp = true;
   if (MatchAddress(N, AM))
     return false;
 
@@ -1241,6 +1266,8 @@ bool X86DAGToDAGISel::SelectLEAAddr(SDNode *Op, SDValue N,
   SDValue Copy = AM.Segment;
   SDValue T = CurDAG->getRegister(0, MVT::i32);
   AM.Segment = T;
+  // @LOCALMOD
+  selectingMemOp = false;
   if (MatchAddress(N, AM))
     return false;
   assert (T == AM.Segment);

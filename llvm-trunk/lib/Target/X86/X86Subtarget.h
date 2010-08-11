@@ -176,6 +176,8 @@ public:
   bool isTargetNaCl32() const { return isTargetNaCl() && !is64Bit(); }
   bool isTargetNaCl64() const { return isTargetNaCl() && is64Bit(); }
   
+  bool has64BitPointers() const { return is64Bit() && !isTargetNaCl(); }
+
   bool isTargetWindows() const { return TargetTriple.getOS() == Triple::Win32; }
   bool isTargetMingw() const { 
     return TargetTriple.getOS() == Triple::MinGW32 ||

@@ -35,6 +35,13 @@ def i64i8imm   : Operand<i64> {
   let ParserMatchClass = ImmSExti64i8AsmOperand;
 }
 
+// @LOCALMOD
+def lea64mem : Operand<i64> {
+  let PrintMethod = "printi64mem";
+  let MIOperandInfo = (ops GR64, i8imm, GR64_NOSP, i32imm, i8imm);
+  let ParserMatchClass = X86MemAsmOperand;
+}
+
 def lea64_32mem : Operand<i32> {
   let PrintMethod = "printi32mem";
   let AsmOperandLowerMethod = "lower_lea64_32mem";
@@ -292,7 +299,7 @@ def LEA64_32r : I<0x8D, MRMSrcMem,
                   [(set GR32:$dst, lea32addr:$src)]>, Requires<[In64BitMode]>;
 
 let isReMaterializable = 1 in
-def LEA64r   : RI<0x8D, MRMSrcMem, (outs GR64:$dst), (ins i64mem:$src),
+def LEA64r   : RI<0x8D, MRMSrcMem, (outs GR64:$dst), (ins lea64mem:$src),
                   "lea{q}\t{$src|$dst}, {$dst|$src}",
                   [(set GR64:$dst, lea64addr:$src)]>;
 
