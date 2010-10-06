@@ -64,6 +64,14 @@ def SDT_X86VASTART_SAVE_XMM_REGS : SDTypeProfile<0, -1, [SDTCisVT<0, i8>,
                                                          SDTCisVT<1, iPTR>,
                                                          SDTCisVT<2, iPTR>]>;
 
+// @LOCALMOD-BEGIN
+def SDT_X86VAARG_64 : SDTypeProfile<1, -1, [SDTCisPtrTy<0>,
+                                            SDTCisPtrTy<1>,
+                                            SDTCisVT<2, i32>,
+                                            SDTCisVT<3, i8>,
+                                            SDTCisVT<4, i32>]>;
+// @LOCALMOD-END
+
 def SDTX86RepStr  : SDTypeProfile<0, 1, [SDTCisVT<0, OtherVT>]>;
 
 def SDTX86Void    : SDTypeProfile<0, 0, []>;
@@ -141,7 +149,11 @@ def X86vastart_save_xmm_regs :
                  SDNode<"X86ISD::VASTART_SAVE_XMM_REGS",
                         SDT_X86VASTART_SAVE_XMM_REGS,
                         [SDNPHasChain, SDNPVariadic]>;
-
+// @LOCALMOD-BEGIN
+def X86vaarg64 :
+                 SDNode<"X86ISD::VAARG_64", SDT_X86VAARG_64, 
+                        [SDNPHasChain, SDNPMayLoad, SDNPMayStore]>;
+// @LOCALMOD-END
 def X86callseq_start :
                  SDNode<"ISD::CALLSEQ_START", SDT_X86CallSeqStart,
                         [SDNPHasChain, SDNPOutFlag]>;
@@ -353,6 +365,13 @@ def i64i8imm   : Operand<i64> {
   let ParserMatchClass = ImmSExti64i8AsmOperand;
 }
 
+// @LOCALMOD
+def lea64mem : Operand<i64> {
+  let PrintMethod = "printi64mem";
+  let MIOperandInfo = (ops GR64, i8imm, GR64_NOSP, i32imm, i8imm);
+  let ParserMatchClass = X86MemAsmOperand;
+}
+
 def lea64_32mem : Operand<i32> {
   let PrintMethod = "printi32mem";
   let AsmOperandLowerMethod = "lower_lea64_32mem";
@@ -409,6 +428,10 @@ def In32BitMode  : Predicate<"!Subtarget->is64Bit()">;
 def In64BitMode  : Predicate<"Subtarget->is64Bit()">;
 def IsWin64      : Predicate<"Subtarget->isTargetWin64()">;
 def NotWin64     : Predicate<"!Subtarget->isTargetWin64()">;
+def IsNaCl       : Predicate<"Subtarget->isTargetNaCl()">;     // @LOCALMOD
+def IsNaCl32     : Predicate<"Subtarget->isTargetNaCl32()">;   // @LOCALMOD
+def IsNaCl64     : Predicate<"Subtarget->isTargetNaCl64()">;   // @LOCALMOD
+def NotNaCl      : Predicate<"!Subtarget->isTargetNaCl()">;    // @LOCALMOD
 def SmallCode    : Predicate<"TM.getCodeModel() == CodeModel::Small">;
 def KernelCode   : Predicate<"TM.getCodeModel() == CodeModel::Kernel">;
 def FarData      : Predicate<"TM.getCodeModel() != CodeModel::Small &&"
@@ -743,11 +766,11 @@ def LEA64_32r : I<0x8D, MRMSrcMem,
                   "lea{l}\t{$src|$dst}, {$dst|$src}",
                   [(set GR32:$dst, lea32addr:$src)]>, Requires<[In64BitMode]>;
 
+// @LOCALMOD: lea64mem
 let isReMaterializable = 1 in
-def LEA64r   : RI<0x8D, MRMSrcMem, (outs GR64:$dst), (ins i64mem:$src),
+def LEA64r   : RI<0x8D, MRMSrcMem, (outs GR64:$dst), (ins lea64mem:$src),
                   "lea{q}\t{$src|$dst}, {$dst|$src}",
                   [(set GR64:$dst, lea64addr:$src)]>;
-
 
 
 // These uses the DF flag in the EFLAGS register to inc or dec EDI and ESI
@@ -2460,6 +2483,12 @@ def XLAT : I<0xD7, RawFrm, (outs), (ins), "xlatb", []>;
 // Floating Point Stack Support
 include "X86InstrFPStack.td"
 include "X86Instr64bit.td"
+
+//===----------------------------------------------------------------------===//
+// NaCl support (@LOCALMOD)
+//===----------------------------------------------------------------------===//
+
+include "X86InstrNaCl.td"
 
 include "X86InstrCMovSetCC.td"
 include "X86InstrExtension.td"
