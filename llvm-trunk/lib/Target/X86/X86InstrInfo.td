@@ -362,6 +362,13 @@ def i64i8imm   : Operand<i64> {
   let ParserMatchClass = ImmSExti64i8AsmOperand;
 }
 
+// @LOCALMOD
+def lea64mem : Operand<i64> {
+  let PrintMethod = "printi64mem";
+  let MIOperandInfo = (ops GR64, i8imm, GR64_NOSP, i32imm, i8imm);
+  let ParserMatchClass = X86MemAsmOperand;
+}
+
 def lea64_32mem : Operand<i32> {
   let PrintMethod = "printi32mem";
   let AsmOperandLowerMethod = "lower_lea64_32mem";
@@ -418,6 +425,10 @@ def In32BitMode  : Predicate<"!Subtarget->is64Bit()">;
 def In64BitMode  : Predicate<"Subtarget->is64Bit()">;
 def IsWin64      : Predicate<"Subtarget->isTargetWin64()">;
 def NotWin64     : Predicate<"!Subtarget->isTargetWin64()">;
+def IsNaCl       : Predicate<"Subtarget->isTargetNaCl()">;     // @LOCALMOD
+def IsNaCl32     : Predicate<"Subtarget->isTargetNaCl32()">;   // @LOCALMOD
+def IsNaCl64     : Predicate<"Subtarget->isTargetNaCl64()">;   // @LOCALMOD
+def NotNaCl      : Predicate<"!Subtarget->isTargetNaCl()">;    // @LOCALMOD
 def SmallCode    : Predicate<"TM.getCodeModel() == CodeModel::Small">;
 def KernelCode   : Predicate<"TM.getCodeModel() == CodeModel::Kernel">;
 def FarData      : Predicate<"TM.getCodeModel() != CodeModel::Small &&"
@@ -1184,6 +1195,12 @@ def XLAT : I<0xD7, RawFrm, (outs), (ins), "xlatb", []>;
 //===----------------------------------------------------------------------===//
 
 include "X86InstrArithmetic.td"
+
+//===----------------------------------------------------------------------===//
+// NaCl support (@LOCALMOD)
+//===----------------------------------------------------------------------===//
+
+include "X86InstrNaCl.td"
 include "X86InstrCMovSetCC.td"
 include "X86InstrExtension.td"
 include "X86InstrControl.td"

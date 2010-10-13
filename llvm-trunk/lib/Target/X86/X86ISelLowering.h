@@ -427,6 +427,7 @@ namespace llvm {
   //===--------------------------------------------------------------------===//
   //  X86TargetLowering - X86 Implementation of the TargetLowering interface
   class X86TargetLowering : public TargetLowering {
+
   public:
     explicit X86TargetLowering(X86TargetMachine &TM);
 
@@ -666,7 +667,7 @@ namespace llvm {
 
     /// X86StackPtr - X86 physical register used as stack ptr.
     unsigned X86StackPtr;
-   
+
     /// X86ScalarSSEf32, X86ScalarSSEf64 - Select between SSE or x87 
     /// floating point ops.
     /// When SSE is available, use it for f32 operations.
@@ -787,7 +788,7 @@ namespace llvm {
 
     // Utility functions to help LowerVECTOR_SHUFFLE
     SDValue LowerVECTOR_SHUFFLEv8i16(SDValue Op, SelectionDAG &DAG) const;
-
+    
     virtual SDValue
       LowerFormalArguments(SDValue Chain,
                            CallingConv::ID CallConv, bool isVarArg,
