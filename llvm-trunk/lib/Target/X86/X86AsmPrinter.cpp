@@ -79,6 +79,17 @@ bool X86AsmPrinter::runOnMachineFunction(MachineFunction &MF) {
   return false;
 }
 
+// @LOCALMOD-BEGIN
+void X86AsmPrinter::EmitFunctionBodyEnd() {
+  if (Subtarget->isTargetNaCl())
+    EmitAlignment(5);
+}
+
+bool X86AsmPrinter::UseReadOnlyJumpTables() const {
+  return Subtarget->isTargetNaCl();
+}
+// @LOCALMOD-END
+
 /// printSymbolOperand - Print a raw symbol reference operand.  This handles
 /// jump tables, constant pools, global address and external symbols, all of
 /// which print to a label with various suffixes for relocation types etc.
