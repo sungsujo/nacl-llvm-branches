@@ -10,6 +10,7 @@
 #include "llvm/Target/TargetAsmBackend.h"
 #include "X86.h"
 #include "X86FixupKinds.h"
+#include "X86InstrNaCl.h" // @LOCALMOD
 #include "llvm/ADT/Twine.h"
 #include "llvm/MC/MCAssembler.h"
 #include "llvm/MC/MCELFObjectWriter.h"
@@ -299,6 +300,20 @@ public:
     const MCSectionELF &ES = static_cast<const MCSectionELF&>(Section);
     return ES.getFlags() & ELF::SHF_MERGE;
   }
+
+  // @LOCALMOD-BEGIN
+  unsigned getBundleSize() const {
+    return OSType == Triple::NativeClient ? 32 : 0;
+  }
+
+  bool CustomExpandInst(const MCInst &Inst, MCStreamer &Out) const {
+    if (OSType == Triple::NativeClient) {
+      return CustomExpandInstNaCl(Inst, Out);
+    }
+    return false;
+  }
+  // @LOCALMOD-END
+
 };
 
 class ELFX86_32AsmBackend : public ELFX86AsmBackend {

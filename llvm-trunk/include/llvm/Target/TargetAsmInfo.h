@@ -28,6 +28,7 @@ namespace llvm {
 class TargetAsmInfo {
   unsigned PointerSize;
   bool IsLittleEndian;
+  unsigned StackSlotSize; // @LOCALMOD
   TargetFrameLowering::StackDirection StackDir;
   const TargetRegisterInfo *TRI;
   std::vector<MachineMove> InitialFrameState;

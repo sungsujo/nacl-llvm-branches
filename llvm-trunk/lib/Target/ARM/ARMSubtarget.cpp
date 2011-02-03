@@ -20,13 +20,22 @@
 #include "llvm/ADT/SmallVector.h"
 using namespace llvm;
 
-static cl::opt<bool>
+cl::opt<bool> // @LOCALMOD
 ReserveR9("arm-reserve-r9", cl::Hidden,
           cl::desc("Reserve R9, making it unavailable as GPR"));
 
 static cl::opt<bool>
 DarwinUseMOVT("arm-darwin-use-movt", cl::init(true), cl::Hidden);
 
+// @LOCALMOD-START
+// TODO: * JITing has not been tested at all
+//       * Thumb mode operation is also not clear: it seems jump tables
+//         for thumb are broken independent of this option
+static cl::opt<bool>
+NoInlineJumpTables("no-inline-jumptables",
+                  cl::desc("Do not place jump tables inline in the code"));
+// @LOCALMOD-END
+                     
 static cl::opt<bool>
 StrictAlign("arm-strict-align", cl::Hidden,
             cl::desc("Disallow all unaligned memory accesses"));
@@ -44,6 +53,7 @@ ARMSubtarget::ARMSubtarget(const std::string &TT, const std::string &FS,
   , NoARM(false)
   , PostRAScheduler(false)
   , IsR9Reserved(ReserveR9)
+  , UseInlineJumpTables(!NoInlineJumpTables) // @LOCALMOD
   , UseMovt(false)
   , HasFP16(false)
   , HasD16(false)
@@ -152,6 +162,11 @@ ARMSubtarget::ARMSubtarget(const std::string &TT, const std::string &FS,
     IsR9Reserved = ReserveR9 | (ARMArchVersion < V6);
     UseMovt = DarwinUseMOVT && hasV6T2Ops();
   }
+
+  // @LOCALMOD-BEGIN
+  // This should be true if isTargetNaCl()
+  UseMovt = true;
+  // @LOCALMOD-END
 
   if (!isThumb() || hasThumb2())
     PostRAScheduler = true;

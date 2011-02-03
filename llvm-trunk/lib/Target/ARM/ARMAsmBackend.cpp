@@ -388,6 +388,12 @@ public:
   void ApplyFixup(const MCFixup &Fixup, char *Data, unsigned DataSize,
                   uint64_t Value) const;
 
+  // @LOCALMOD-BEGIN
+  unsigned getBundleSize() const {
+    return (OSType == Triple::NativeClient) ? 16 : 0;
+  }
+ // @LOCALMOD-END
+
   MCObjectWriter *createObjectWriter(raw_ostream &OS) const {
     return createELFObjectWriter(new ARMELFObjectWriter(OSType), OS,
                               /*IsLittleEndian*/ true);

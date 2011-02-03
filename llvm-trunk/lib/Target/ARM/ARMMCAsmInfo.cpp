@@ -65,4 +65,9 @@ ARMELFMCAsmInfo::ARMELFMCAsmInfo() {
   DwarfRequiresFrameSection = false;
 
   SupportsDebugInformation = true;
+
+  // @LOCALMOD-START
+  // Exceptions handling
+  ExceptionsType = ExceptionHandling::DwarfTable;
+  // @LOCALMOD-END
 }

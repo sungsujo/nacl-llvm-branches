@@ -29,7 +29,8 @@ public:
     : TargetFrameLowering(StackGrowsDown,
                           sti.getStackAlignment(),
                           (sti.isTargetWin64() ? -40 :
-                           (sti.is64Bit() ? -8 : -4))),
+                           (sti.is64Bit() ? -8 : -4)),
+                          1, (sti.is64Bit() ? 8 : 4)), // @LOCALMOD
       TM(tm), STI(sti) {
   }
 

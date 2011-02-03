@@ -577,6 +577,11 @@ endif
 endif
 endif
 
+ifeq ($(NACL_SANDBOX),1)
+  LIBS += -lsrpc -lpthread -lm -lnacl -lnosys
+else
+  LIBS +=
+endif
 
 #----------------------------------------------------------
 # Options To Invoke Tools

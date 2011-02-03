@@ -179,8 +179,24 @@ enum {
   ELFOSABI_C6000_ELFABI = 64, // Bare-metal TMS320C6000
   ELFOSABI_C6000_LINUX = 65,  // Linux TMS320C6000
   ELFOSABI_ARM = 97,          // ARM
+  ELFOSABI_NACL = 123,        // Native Client // @LOCALMOD
   ELFOSABI_STANDALONE = 255   // Standalone (embedded) application
 };
+
+// @LOCALMOD-BEGIN
+// ABIVERSION identification.
+enum {
+  ELFABIVERSION_NACL = 7
+};
+
+// Native-client specific flags
+enum {
+  EF_NACL_ALIGN_LIB =  0x000000,
+  EF_NACL_ALIGN_16 =   0x100000,
+  EF_NACL_ALIGN_32 =   0x200000,
+  EF_NACL_ALIGN_MASK = 0x300000
+};
+// @LOCALMOD-END
 
 // X86_64 relocations.
 enum {

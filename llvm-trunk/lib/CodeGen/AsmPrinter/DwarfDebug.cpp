@@ -3320,7 +3320,8 @@ void DwarfDebug::emitCommonDebugFrame() {
   if (!Asm->MAI->doesDwarfRequireFrameSection())
     return;
 
-  int stackGrowth = Asm->getTargetData().getPointerSize();
+  int stackGrowth =
+    Asm->TM.getFrameLowering()->getStackSlotSize(); // @LOCALMOD
   if (Asm->TM.getFrameLowering()->getStackGrowthDirection() ==
       TargetFrameLowering::StackGrowsDown)
     stackGrowth *= -1;

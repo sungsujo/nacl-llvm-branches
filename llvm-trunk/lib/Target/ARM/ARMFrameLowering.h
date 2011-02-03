@@ -27,7 +27,8 @@ protected:
 
 public:
   explicit ARMFrameLowering(const ARMSubtarget &sti)
-    : TargetFrameLowering(StackGrowsDown, sti.getStackAlignment(), 0, 4),
+    : TargetFrameLowering(StackGrowsDown, sti.getStackAlignment(), 0, 4,
+      4), // @LOCALMOD
       STI(sti) {
   }
 
@@ -54,6 +55,7 @@ public:
   int ResolveFrameIndexReference(const MachineFunction &MF, int FI,
                                  unsigned &FrameReg, int SPAdj) const;
   int getFrameIndexOffset(const MachineFunction &MF, int FI) const;
+  void getInitialFrameState(std::vector<MachineMove> &Moves) const; // @LOCALMOD
 
   void processFunctionBeforeCalleeSavedScan(MachineFunction &MF,
                                             RegScavenger *RS) const;
