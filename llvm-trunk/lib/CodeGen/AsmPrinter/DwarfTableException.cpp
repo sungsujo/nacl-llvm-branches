@@ -51,7 +51,8 @@ DwarfTableException::~DwarfTableException() {}
 /// in every non-empty .debug_frame section.
 void DwarfTableException::EmitCIE(const Function *PersonalityFn, unsigned Index) {
   // Size and sign of stack growth.
-  int stackGrowth = Asm->getTargetData().getPointerSize();
+  int stackGrowth =
+    Asm->TM.getFrameLowering()->getStackSlotSize(); // @LOCALMOD
   if (Asm->TM.getFrameLowering()->getStackGrowthDirection() ==
       TargetFrameLowering::StackGrowsDown)
     stackGrowth *= -1;

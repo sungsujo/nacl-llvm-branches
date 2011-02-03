@@ -22,6 +22,10 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/RegisterScavenging.h"
 #include "llvm/Target/TargetOptions.h"
+// @LOCALMOD-START
+#include "llvm/CodeGen/MachineModuleInfo.h"
+#include "llvm/Function.h"
+// @LOCALMOD-END
 
 using namespace llvm;
 
@@ -116,6 +120,16 @@ emitSPUpdate(bool isARM,
                            Pred, PredReg, TII);
 }
 
+// @LOCALMOD-START
+void
+ARMFrameLowering::getInitialFrameState(std::vector<MachineMove> &Moves) const {
+  // Initial state of the frame ARM:SP points to cfa
+  MachineLocation dst(MachineLocation::VirtualFP);
+  MachineLocation src(ARM::SP, 0);
+  Moves.push_back(MachineMove(0, dst, src));
+}
+// @LOCALMOD-END
+
 void ARMFrameLowering::emitPrologue(MachineFunction &MF) const {
   MachineBasicBlock &MBB = MF.front();
   MachineBasicBlock::iterator MBBI = MBB.begin();
@@ -138,6 +152,14 @@ void ARMFrameLowering::emitPrologue(MachineFunction &MF) const {
   // belongs to which callee-save spill areas.
   unsigned GPRCS1Size = 0, GPRCS2Size = 0, DPRCSSize = 0;
   int FramePtrSpillFI = 0;
+
+  // @LOCALMOD-START
+  MachineModuleInfo &MMI = MF.getMMI();
+  // This condition was gleaned from x86 / PowerPC / XCore
+  bool needsFrameMoves = MMI.hasDebugInfo() ||
+                         !MF.getFunction()->doesNotThrow() ||
+                         UnwindTablesMandatory;
+  // @LOCALMOD-END
 
   // Allocate the vararg register save area. This is not counted in NumBytes.
   if (VARegSaveSize)
@@ -186,6 +208,42 @@ void ARMFrameLowering::emitPrologue(MachineFunction &MF) const {
   // Move past area 1.
   if (GPRCS1Size > 0) MBBI++;
 
+  // @LOCALMOD-START
+  if (needsFrameMoves && GPRCS1Size > 0) {
+    // we just skipped the initial callee save reg instructions, e.g.
+    // push {r4, r5, r6, lr}
+    // NOTE: this likely is not the right thing to do for darwin as it does not
+    //       treat all callee save regs uniformly
+    MCSymbol *AfterRegSave = MMI.getContext().CreateTempSymbol();
+    BuildMI(MBB, MBBI, dl, TII.get(ARM::PROLOG_LABEL)).addSym(AfterRegSave);
+    // record the fact that the stack has moved
+    MachineLocation dst(MachineLocation::VirtualFP);
+    MachineLocation src(MachineLocation::VirtualFP, -GPRCS1Size);
+    MMI.getFrameMoves().push_back(MachineMove(AfterRegSave, dst, src));
+    // for each callee saved register record where it has been saved
+    int offset = 0;
+    for (unsigned i = 0, e = CSI.size(); i != e; ++i) {
+      unsigned Reg = CSI[i].getReg();
+      switch (Reg) {
+       case ARM::R4:
+       case ARM::R5:
+       case ARM::R6:
+       case ARM::R7:
+       case ARM::R8:
+       case ARM::R9:
+       case ARM::R10:
+       case ARM::R11:
+       case ARM::LR:
+        offset -= 4;
+        MachineLocation dst(MachineLocation::VirtualFP, offset);
+        MachineLocation src(Reg);
+        MMI.getFrameMoves().push_back(MachineMove(AfterRegSave, dst, src));
+        break;
+      }
+    }
+  }
+  // @LOCALMOD-END
+
   // Set FP to point to the stack slot that contains the previous FP.
   // For Darwin, FP is R7, which has now been stored in spill area 1.
   // Otherwise, if this is not Darwin, all the callee-saved registers go
@@ -198,7 +256,28 @@ void ARMFrameLowering::emitPrologue(MachineFunction &MF) const {
       BuildMI(MBB, MBBI, dl, TII.get(ADDriOpc), FramePtr)
       .addFrameIndex(FramePtrSpillFI).addImm(0);
     AddDefaultCC(AddDefaultPred(MIB));
+    // @LOCALMOD-START
+    if (needsFrameMoves) {
+      // we just emitted the fp pointer setup instruction, e.g.
+      // add      r11, sp, #8
+      MCSymbol *AfterFramePointerInit = MMI.getContext().CreateTempSymbol();
+      BuildMI(MBB, MBBI, dl,
+              TII.get(ARM::PROLOG_LABEL)).addSym(AfterFramePointerInit);
+      // record the fact that the frame pointer is now tracking the "cfa"
+      // Note, gcc and llvm have a slightly different notion of where the
+      // frame pointer should be pointing. gcc points after the return address
+      // and llvm one word further down (two words = 8).
+      // This should be fine as long as we are consistent.
+      // NOTE: this is related to the offset computed for
+      // ISD::FRAME_TO_ARGS_OFFSET
+      MachineLocation dst(MachineLocation::VirtualFP);
+      MachineLocation src(FramePtr, -8);
+      MMI.getFrameMoves().push_back(MachineMove(AfterFramePointerInit, dst, src));
+    }
+    // @LOCALMOD-END
   }
+
+
 
   // Move past area 2.
   if (GPRCS2Size > 0) MBBI++;
@@ -231,6 +310,19 @@ void ARMFrameLowering::emitPrologue(MachineFunction &MF) const {
       // an inconsistent state (pointing to the middle of callee-saved area).
       // The interrupt handler can end up clobbering the registers.
       AFI->setShouldRestoreSPFromFP(true);
+
+    // @LOCALMOD-START
+    // we only track sp changes if do not have the fp to figure out where
+    // stack frame lives
+    if (needsFrameMoves && !HasFP) {
+      MCSymbol *AfterStackUpdate = MMI.getContext().CreateTempSymbol();
+      BuildMI(MBB, MBBI, dl,
+              TII.get(ARM::PROLOG_LABEL)).addSym(AfterStackUpdate);
+      MachineLocation dst(MachineLocation::VirtualFP);
+      MachineLocation src(MachineLocation::VirtualFP, - NumBytes - GPRCS1Size);
+      MMI.getFrameMoves().push_back(MachineMove(AfterStackUpdate, dst, src));
+    }
+    // @LOCALMOD-END
   }
 
   if (STI.isTargetELF() && hasFP(MF))
@@ -596,7 +688,8 @@ void ARMFrameLowering::emitPopInst(MachineBasicBlock &MBB,
       unsigned Reg = CSI[i-1].getReg();
       if (!(Func)(Reg, STI.isTargetDarwin())) continue;
 
-      if (Reg == ARM::LR && !isVarArg && STI.hasV5TOps()) {
+      if (Reg == ARM::LR && !isVarArg && STI.hasV5TOps() &&
+          false /* @LOCALMOD */) {
         Reg = ARM::PC;
         LdmOpc = AFI->isThumbFunction() ? ARM::t2LDMIA_RET : ARM::LDMIA_RET;
         // Fold the return instruction into the LDM.

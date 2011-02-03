@@ -56,6 +56,13 @@
 #include <cctype>
 using namespace llvm;
 
+// @LOCALMOD-START
+namespace llvm {
+  extern cl::opt<bool> FlagSfiBranch;
+  extern cl::opt<bool> FlagSfiData;
+}
+// @LOCALMOD-END
+
 namespace {
 
   // Per section and per symbol attributes are not supported.
@@ -136,7 +143,6 @@ namespace {
       Contents.clear();
     }
   };
-
 } // end of anonymous namespace
 
 MachineLocation ARMAsmPrinter::
@@ -152,12 +158,79 @@ getDebugValueLocation(const MachineInstr *MI) const {
   return Location;
 }
 
+// @LOCALMOD-START
+// Make sure all jump targets are aligned and also all constant pools
+void NaclAlignAllJumpTargetsAndConstantPools(MachineFunction &MF) {
+  // JUMP TABLE TARGETS
+  MachineJumpTableInfo *jt_info = MF.getJumpTableInfo();
+  if (jt_info) {
+    const std::vector<MachineJumpTableEntry> &JT = jt_info->getJumpTables();
+    for (unsigned i=0; i < JT.size(); ++i) {
+      std::vector<MachineBasicBlock*> MBBs = JT[i].MBBs;
+
+      for (unsigned j=0; j < MBBs.size(); ++j) {
+        if (MBBs[j]->begin()->getOpcode() == ARM::CONSTPOOL_ENTRY) {
+          continue;
+        }
+        MBBs[j]->setAlignment(16);
+      }
+    }
+  }
+
+  // FIRST ENTRY IN A ConstanPool
+  bool last_bb_was_constant_pool = false;
+  for (MachineFunction::iterator I = MF.begin(), E = MF.end();
+       I != E; ++I) {
+    if (I->isLandingPad()) {
+        I->setAlignment(16);
+    }
+
+    if (I->empty()) continue;
+
+    bool is_constant_pool = I->begin()->getOpcode() == ARM::CONSTPOOL_ENTRY;
+
+    if (last_bb_was_constant_pool != is_constant_pool) {
+      I->setAlignment(16);
+    }
+
+    last_bb_was_constant_pool = is_constant_pool;
+  }
+}
+
+unsigned ARMAsmPrinter::GetTargetLabelAlign(const MachineInstr *MI) const {
+  if (true /* Subtarget->isTargetNaCl() */) {
+    switch (MI->getOpcode()) {
+      default: return 0;
+      // These labels may indicate an indirect entry point that is
+      // externally reachable and hence must be bundle aligned.
+      // Note: these labels appear to be always at basic block beginnings
+      // so it may be possible to simply set the MBB alignment.
+      // However, it is unclear whether this always holds.
+      case TargetOpcode::EH_LABEL:
+      case TargetOpcode::GC_LABEL:
+        return 4;
+    }
+  }
+  return 0;
+}
+// @LOCALMOD-END
+
+
 void ARMAsmPrinter::EmitFunctionEntryLabel() {
   if (AFI->isThumbFunction()) {
     OutStreamer.EmitAssemblerFlag(MCAF_Code16);
     OutStreamer.EmitThumbFunc(Subtarget->isTargetDarwin()? CurrentFnSym : 0);
   }
 
+  // @LOCALMOD-START
+  // make sure function entry is aligned. We use  XmagicX as our basis
+  // for alignment decisions (c.f. assembler sfi macros)
+  int alignment = MF->getAlignment();
+  if (alignment < 4) alignment = 4;
+  EmitAlignment(alignment);
+  OutStreamer.EmitRawText(StringRef("\t.set XmagicX, .\n"));
+  // @LOCALMOD-END
+ 
   OutStreamer.EmitLabel(CurrentFnSym);
 }
 
@@ -168,6 +241,11 @@ bool ARMAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
   AFI = MF.getInfo<ARMFunctionInfo>();
   MCP = MF.getConstantPool();
 
+  // @LOCALMOD-START
+  if (FlagSfiBranch) {
+    NaclAlignAllJumpTargetsAndConstantPools(MF);
+  }
+  // @LOCALMOD-END
   return AsmPrinter::runOnMachineFunction(MF);
 }
 
@@ -204,10 +282,10 @@ void ARMAsmPrinter::printOperand(const MachineInstr *MI, int OpNum,
   case MachineOperand::MO_GlobalAddress: {
     const GlobalValue *GV = MO.getGlobal();
     if ((Modifier && strcmp(Modifier, "lo16") == 0) ||
-        (TF & ARMII::MO_LO16))
+        (TF == ARMII::MO_LO16)) // @LOCALMOD: TEMPORARY FIX
       O << ":lower16:";
     else if ((Modifier && strcmp(Modifier, "hi16") == 0) ||
-             (TF & ARMII::MO_HI16))
+             (TF == ARMII::MO_HI16)) // @LOCALMOD: TEMPORARY FIX
       O << ":upper16:";
     O << *Mang->getSymbol(GV);
 
@@ -232,6 +310,7 @@ void ARMAsmPrinter::printOperand(const MachineInstr *MI, int OpNum,
 }
 
 //===--------------------------------------------------------------------===//
+
 
 MCSymbol *ARMAsmPrinter::
 GetARMSetPICJumpTableLabel2(unsigned uid, unsigned uid2,
@@ -310,6 +389,8 @@ bool ARMAsmPrinter::PrintAsmMemoryOperand(const MachineInstr *MI,
   return false;
 }
 
+void EmitSFIHeaders(raw_ostream &O);
+
 void ARMAsmPrinter::EmitStartOfAsmFile(Module &M) {
   if (Subtarget->isTargetDarwin()) {
     Reloc::Model RelocM = TM.getRelocationModel();
@@ -356,8 +437,16 @@ void ARMAsmPrinter::EmitStartOfAsmFile(Module &M) {
 
     emitAttributes();
   }
-}
 
+  // @LOCALMOD-BEGIN
+  if (/*IsNaCl?*/ true) {
+    std::string str;
+    raw_string_ostream OS(str);
+    EmitSFIHeaders(OS);
+    OutStreamer.EmitRawText(StringRef(OS.str()));
+  }
+  // @LOCALMOD-END
+}
 
 void ARMAsmPrinter::EmitEndOfAsmFile(Module &M) {
   if (Subtarget->isTargetDarwin()) {
@@ -604,7 +693,20 @@ EmitMachineConstantPoolValue(MachineConstantPoolValue *MCPV) {
       PCRelExpr = MCBinaryExpr::CreateSub(PCRelExpr, DotExpr, OutContext);
     }
     Expr = MCBinaryExpr::CreateSub(Expr, PCRelExpr, OutContext);
+  } else {   // @LOCALMOD-BEGIN
+    // Check mustAddCurrentAddress() when getPCAdjustment() == 0,
+    // and make it actually *Subtract* the current address.
+    // A more appropriate name is probably "relativeToCurrentAddress",
+    // since the assembler can't actually handle "X + .", only "X - .".
+    if (ACPV->mustAddCurrentAddress()) {
+      MCSymbol *DotSym = OutContext.CreateTempSymbol();
+      OutStreamer.EmitLabel(DotSym);
+      const MCExpr *DotExpr = MCSymbolRefExpr::Create(DotSym, OutContext);
+      Expr = MCBinaryExpr::CreateSub(Expr, DotExpr, OutContext);
+    }
   }
+  // @LOCALMOD-END
+
   OutStreamer.EmitValue(Expr, Size);
 }
 
@@ -1039,6 +1141,25 @@ void ARMAsmPrinter::EmitInstruction(const MachineInstr *MI) {
     unsigned CPIdx   = (unsigned)MI->getOperand(1).getIndex();
 
     EmitAlignment(2);
+    // @LOCALMOD-START
+    // NOTE: we also should make sure that the first data item
+    // is not in a code bundle
+    // NOTE: there may be issues with alignment constraints
+    const unsigned size = MI->getOperand(2).getImm();
+    //assert(size == 4 || size == 8 && "Unsupported data item size");
+    if (size == 8) {
+      // we cannot generate a size 8 constant at offset 12 (mod 16)
+      OutStreamer.EmitRawText(StringRef("sfi_nop_if_at_bundle_end\n"));
+    }
+
+    if (FlagSfiData) {
+      SmallString<128> Str;
+      raw_svector_ostream OS(Str);
+      OS << "sfi_illegal_if_at_bundle_begining  @ ========== SFI (" << 
+            size << ")\n";
+      OutStreamer.EmitRawText(OS.str());
+    }
+    // @LOCALMOD-END
     OutStreamer.EmitLabel(GetCPISymbol(LabelId));
 
     const MachineConstantPoolEntry &MCPE = MCP->getConstants()[CPIdx];
@@ -1489,6 +1610,50 @@ void ARMAsmPrinter::EmitInstruction(const MachineInstr *MI) {
   case ARM::UMAALv5:
     EmitPatchedInstruction(MI, ARM::UMAAL);
     return;
+
+  // @LOCALMOD-BEGIN
+  // These are pseudo ops for MOVW / MOVT with operands relative to a PC label.
+  // See the comments on MOVi16PIC in the .td file for more details.
+  case ARM::MOVi16PIC: {
+    MCInst TmpInst;
+    // First, build an instruction w/ the real opcode.
+    TmpInst.setOpcode(ARM::MOVi16);
+
+    unsigned ImmIndex = 1;
+    unsigned PIC_id_index = 2;
+    unsigned PCAdjustment = 8;
+    // NOTE: if getPICLabel was a method of "this", or otherwise in scope for
+    // LowerARMMachineInstrToMCInstPCRel, then we wouldn't need to create
+    // it here (as well as below).
+    MCSymbol *PCLabel = getPICLabel(MAI->getPrivateGlobalPrefix(),
+                                    getFunctionNumber(),
+                                    MI->getOperand(PIC_id_index).getImm(),
+                                    OutContext);
+    LowerARMMachineInstrToMCInstPCRel(MI, TmpInst, *this, ImmIndex,
+                                      PIC_id_index, PCLabel, PCAdjustment);
+    OutStreamer.EmitInstruction(TmpInst);
+    return;
+  }
+  case ARM::MOVTi16PIC: {
+    MCInst TmpInst;
+    // First, build an instruction w/ the real opcode.
+    TmpInst.setOpcode(ARM::MOVTi16);
+
+    unsigned ImmIndex = 2;
+    unsigned PIC_id_index = 3;
+    unsigned PCAdjustment = 8;
+
+    MCSymbol *PCLabel = getPICLabel(MAI->getPrivateGlobalPrefix(),
+                                    getFunctionNumber(),
+                                    MI->getOperand(PIC_id_index).getImm(),
+                                    OutContext);
+
+    LowerARMMachineInstrToMCInstPCRel(MI, TmpInst, *this, ImmIndex,
+                                      PIC_id_index, PCLabel, PCAdjustment);
+    OutStreamer.EmitInstruction(TmpInst);
+    return;
+  }
+  //@LOCALMOD-END
   }
 
   MCInst TmpInst;
@@ -1516,4 +1681,3 @@ extern "C" void LLVMInitializeARMAsmPrinter() {
   TargetRegistry::RegisterMCInstPrinter(TheARMTarget, createARMMCInstPrinter);
   TargetRegistry::RegisterMCInstPrinter(TheThumbTarget, createARMMCInstPrinter);
 }
-

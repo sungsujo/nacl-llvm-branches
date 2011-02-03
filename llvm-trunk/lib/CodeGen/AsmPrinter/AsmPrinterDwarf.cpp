@@ -213,7 +213,7 @@ void AsmPrinter::EmitFrameMoves(const std::vector<MachineMove> &Moves,
                                 MCSymbol *BaseLabel, bool isEH) const {
   const TargetRegisterInfo *RI = TM.getRegisterInfo();
   
-  int stackGrowth = TM.getTargetData()->getPointerSize();
+  int stackGrowth = TM.getFrameLowering()->getStackSlotSize(); // @LOCALMOD
   if (TM.getFrameLowering()->getStackGrowthDirection() !=
       TargetFrameLowering::StackGrowsUp)
     stackGrowth *= -1;
@@ -282,7 +282,7 @@ void AsmPrinter::EmitFrameMoves(const std::vector<MachineMove> &Moves,
 void AsmPrinter::EmitCFIFrameMoves(const std::vector<MachineMove> &Moves) const {
   const TargetRegisterInfo *RI = TM.getRegisterInfo();
 
-  int stackGrowth = TM.getTargetData()->getPointerSize();
+  int stackGrowth = TM.getFrameLowering()->getStackSlotSize(); // @LOCALMOD
   if (TM.getFrameLowering()->getStackGrowthDirection() !=
       TargetFrameLowering::StackGrowsUp)
     stackGrowth *= -1;

@@ -443,9 +443,24 @@ void ELFObjectWriter::WriteHeader(uint64_t SectionDataSize,
   switch (TargetObjectWriter->getOSType()) {
     case Triple::FreeBSD:  Write8(ELF::ELFOSABI_FREEBSD); break;
     case Triple::Linux:    Write8(ELF::ELFOSABI_LINUX); break;
+    // @LOCALMOD-BEGIN
+    case Triple::NativeClient:
+      Write8(ELF::ELFOSABI_NACL);
+      break;
+    // @LOCALMOD-END
     default:               Write8(ELF::ELFOSABI_NONE); break;
   }
-  Write8(0);                  // e_ident[EI_ABIVERSION]
+
+  // @LOCALMOD-BEGIN
+  switch (TargetObjectWriter->getOSType()) {
+  case Triple::NativeClient:
+    Write8(ELF::ELFABIVERSION_NACL);
+    break;
+  default:
+    Write8(0);                    // e_ident[EI_ABIVERSION]
+    break;
+  }
+  // @LOCALMOD-END
 
   WriteZeros(ELF::EI_NIDENT - ELF::EI_PAD);
 
@@ -459,8 +474,16 @@ void ELFObjectWriter::WriteHeader(uint64_t SectionDataSize,
   WriteWord(SectionDataSize + (is64Bit() ? sizeof(ELF::Elf64_Ehdr) :
             sizeof(ELF::Elf32_Ehdr)));  // e_shoff = sec hdr table off in bytes
 
-  // FIXME: Make this configurable.
-  Write32(0);   // e_flags = whatever the target wants
+  // @LOCALMOD-BEGIN
+  switch (TargetObjectWriter->getOSType()) {
+  case Triple::NativeClient:
+    Write32(ELF::EF_NACL_ALIGN_32);
+    break;
+  default:
+    Write32(0);   // e_flags = whatever the target wants
+    break;
+  }
+  // @LOCALMOD-END
 
   // e_ehsize = ELF header size
   Write16(is64Bit() ? sizeof(ELF::Elf64_Ehdr) : sizeof(ELF::Elf32_Ehdr));
@@ -711,7 +734,12 @@ const MCSymbol *ELFObjectWriter::SymbolToReloc(const MCAssembler &Asm,
   if (&Sec2 != &Section &&
       (Kind == MCSymbolRefExpr::VK_PLT ||
        Kind == MCSymbolRefExpr::VK_GOTPCREL ||
-       Kind == MCSymbolRefExpr::VK_GOTOFF)) {
+       Kind == MCSymbolRefExpr::VK_GOTOFF ||
+  // @LOCALMOD-BEGIN
+  // Fixes an LLVM bug. This bug has already been fixed upstream
+  // and should disappear on the next merge.
+       Kind == MCSymbolRefExpr::VK_NTPOFF)) {
+  // @LOCALMOD-END
     if (Renamed)
       return Renamed;
     return &Symbol;

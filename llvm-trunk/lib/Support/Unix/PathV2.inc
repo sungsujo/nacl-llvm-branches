@@ -246,6 +246,9 @@ error_code rename(const Twine &from, const Twine &to) {
 }
 
 error_code resize_file(const Twine &path, uint64_t size) {
+#ifdef __native_client__
+  llvm_unreachable("resize_file() not implemented for Native Client");
+#else
   SmallString<128> path_storage;
   StringRef p = path.toNullTerminatedStringRef(path_storage);
 
@@ -253,6 +256,7 @@ error_code resize_file(const Twine &path, uint64_t size) {
     return error_code(errno, system_category());
 
   return success;
+#endif
 }
 
 error_code exists(const Twine &path, bool &result) {
@@ -343,6 +347,9 @@ error_code status(const Twine &path, file_status &result) {
 
 error_code unique_file(const Twine &model, int &result_fd,
                              SmallVectorImpl<char> &result_path) {
+#ifdef __native_client__
+  llvm_unreachable("unique_file() not implemented for Native Client");
+#else
   SmallString<128> Model;
   model.toVector(Model);
   // Null terminate.
@@ -431,6 +438,7 @@ rety_open_create:
 
   result_fd = RandomFD;
   return success;
+#endif
 }
 
 error_code directory_iterator_construct(directory_iterator &it, StringRef path){

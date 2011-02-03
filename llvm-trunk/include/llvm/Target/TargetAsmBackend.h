@@ -20,6 +20,7 @@ class MCFixup;
 class MCInst;
 class MCObjectWriter;
 class MCSection;
+class MCStreamer;
 template<typename T>
 class SmallVectorImpl;
 class raw_ostream;
@@ -116,6 +117,23 @@ public:
   /// HandleAssemblerFlag - Handle any target-specific assembler flags.
   /// By default, do nothing.
   virtual void HandleAssemblerFlag(MCAssemblerFlag Flag) {}
+  
+  // @LOCALMOD-BEGIN
+  /// getBundleSize - Return the size (in bytes) of code bundling units
+  /// for this target. If 0, bundling is disabled. This is used exclusively
+  /// for Native Client.
+  virtual unsigned getBundleSize() const {
+    return 0;
+  }
+
+  /// CustomExpandInst -
+  ///   If the MCInst instruction has a custom expansion, write it to the
+  /// MCStreamer 'Out'. This can be used to perform "last minute" rewrites of
+  /// MCInst instructions for emission.
+  virtual bool CustomExpandInst(const MCInst &Inst, MCStreamer &Out) const {
+    return false;
+  }
+  // @LOCALMOD-END
 };
 
 } // End llvm namespace

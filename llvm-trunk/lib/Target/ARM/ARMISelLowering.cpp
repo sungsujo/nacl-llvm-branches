@@ -51,6 +51,15 @@
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 #include <sstream>
+
+// @LOCALMOD-START
+#include "llvm/Support/CommandLine.h"
+namespace llvm {
+  extern cl::opt<bool> FlagSfiStore;
+  extern cl::opt<bool> FlagSfiDisableCP;
+}
+// @LOCALMOD-END
+
 using namespace llvm;
 
 STATISTIC(NumTailCalls, "Number of tail calls");
@@ -71,6 +80,12 @@ static cl::opt<bool>
 ARMInterworking("arm-interworking", cl::Hidden,
   cl::desc("Enable / disable ARM interworking (for debugging only)"),
   cl::init(true));
+
+// @LOCALMOD-START for debugging TLS models
+static cl::opt<bool> ARMStaticTLS("arm_static_tls",
+                                  cl::desc("Force a static TLS model for ARM"),
+                                  cl::init(false));
+// @LOCALMOD-END
 
 void ARMTargetLowering::addTypeForNEON(EVT VT, EVT PromotedLdStVT,
                                        EVT PromotedBitwiseVT) {
@@ -540,8 +555,13 @@ ARMTargetLowering::ARMTargetLowering(TargetMachine &TM)
   setOperationAction(ISD::GLOBAL_OFFSET_TABLE, MVT::i32, Custom);
   setOperationAction(ISD::GlobalTLSAddress, MVT::i32, Custom);
   setOperationAction(ISD::BlockAddress, MVT::i32, Custom);
-
+  // @LOCALMOD-START
+  if (!Subtarget->useInlineJumpTables())
+    setOperationAction(ISD::JumpTable,     MVT::i32,   Custom);
+  // @LOCALMOD-END
+  
   setOperationAction(ISD::TRAP, MVT::Other, Legal);
+
 
   // Use the default implementation.
   setOperationAction(ISD::VASTART,            MVT::Other, Custom);
@@ -551,10 +571,18 @@ ARMTargetLowering::ARMTargetLowering(TargetMachine &TM)
   setOperationAction(ISD::STACKSAVE,          MVT::Other, Expand);
   setOperationAction(ISD::STACKRESTORE,       MVT::Other, Expand);
   setOperationAction(ISD::EHSELECTION,        MVT::i32,   Expand);
-  setOperationAction(ISD::EXCEPTIONADDR,      MVT::i32,   Expand);
-  setExceptionPointerRegister(ARM::R0);
-  setExceptionSelectorRegister(ARM::R1);
+  // @LOCALMOD-START
+  setOperationAction(ISD::EXCEPTIONADDR, MVT::i32, Expand);
+  // we use the first caller saved regs here
+  // c.f.: llvm-gcc/llvm-gcc-4.2/gcc/unwind-dw2.c::uw_install_context
+  // NOTE: these are related to the _Unwind_PNaClSetResult{0,1} functions
+  setExceptionPointerRegister(ARM::R4);
+  setExceptionSelectorRegister(ARM::R5);
 
+  setOperationAction(ISD::FRAME_TO_ARGS_OFFSET, MVT::i32, Custom);
+
+  setOperationAction(ISD::EH_RETURN, MVT::Other, Custom);
+  // @LOCALMOD-END
   setOperationAction(ISD::DYNAMIC_STACKALLOC, MVT::i32, Expand);
   // ARMv6 Thumb1 (except for CPUs that support dmb / dsb) and earlier use
   // the default expansion.
@@ -641,8 +669,12 @@ ARMTargetLowering::ARMTargetLowering(TargetMachine &TM)
   setOperationAction(ISD::BR_CC,     MVT::i32,   Custom);
   setOperationAction(ISD::BR_CC,     MVT::f32,   Custom);
   setOperationAction(ISD::BR_CC,     MVT::f64,   Custom);
-  setOperationAction(ISD::BR_JT,     MVT::Other, Custom);
-
+  // @LOCALMOD-START
+  //setOperationAction(ISD::BR_JT,     MVT::Other, Custom);
+  setOperationAction(ISD::BR_JT,     MVT::Other,
+                     Subtarget->useInlineJumpTables() ? Custom : Expand);
+  // @LOCALMOD-END
+  
   // We don't support sin/cos/fmod/copysign/pow
   setOperationAction(ISD::FSIN,      MVT::f64, Expand);
   setOperationAction(ISD::FSIN,      MVT::f32, Expand);
@@ -755,6 +787,10 @@ const char *ARMTargetLowering::getTargetNodeName(unsigned Opcode) const {
   case ARMISD::WrapperDYN:    return "ARMISD::WrapperDYN";
   case ARMISD::WrapperPIC:    return "ARMISD::WrapperPIC";
   case ARMISD::WrapperJT:     return "ARMISD::WrapperJT";
+  // @LOCALMOD-START
+  case ARMISD::WrapperJT2:    return "ARMISD::WrapperJT2"; 
+  case ARMISD::EH_RETURN:     return "ARMISD::EH_RETURN"; 
+  // @LOCALMOD-END
   case ARMISD::CALL:          return "ARMISD::CALL";
   case ARMISD::CALL_PRED:     return "ARMISD::CALL_PRED";
   case ARMISD::CALL_NOLINK:   return "ARMISD::CALL_NOLINK";
@@ -1811,7 +1847,14 @@ static SDValue LowerConstantPool(SDValue Op, SelectionDAG &DAG) {
 }
 
 unsigned ARMTargetLowering::getJumpTableEncoding() const {
-  return MachineJumpTableInfo::EK_Inline;
+  // @LOCALMOD-BEGIN
+  if (Subtarget->useInlineJumpTables()) { 
+    return MachineJumpTableInfo::EK_Inline;
+  } else {
+    // TODO: Find a better way to call the super-class.
+    return TargetLowering::getJumpTableEncoding();
+  }
+  // @LOCALMOD-END
 }
 
 SDValue ARMTargetLowering::LowerBlockAddress(SDValue Op,
@@ -1844,28 +1887,85 @@ SDValue ARMTargetLowering::LowerBlockAddress(SDValue Op,
   return DAG.getNode(ARMISD::PIC_ADD, DL, PtrVT, Result, PICLabel);
 }
 
+// @LOCALMOD-START
+// more conventional jumptable implementation
+SDValue ARMTargetLowering::LowerJumpTable(SDValue Op, SelectionDAG &DAG) const {
+  assert(!Subtarget->useInlineJumpTables() &&
+         "inline jump tables not custom lowered");
+  const DebugLoc dl = Op.getDebugLoc();
+  EVT PTy = getPointerTy();
+  JumpTableSDNode *JT = cast<JumpTableSDNode>(Op);
+  SDValue JTI = DAG.getTargetJumpTable(JT->getIndex(), PTy);
+  return DAG.getNode(ARMISD::WrapperJT2, dl, MVT::i32, JTI);
+}
+// @LOCALMOD-END
+
 // Lower ISD::GlobalTLSAddress using the "general dynamic" model
 SDValue
 ARMTargetLowering::LowerToTLSGeneralDynamicModel(GlobalAddressSDNode *GA,
                                                  SelectionDAG &DAG) const {
   DebugLoc dl = GA->getDebugLoc();
   EVT PtrVT = getPointerTy();
-  unsigned char PCAdj = Subtarget->isThumb() ? 4 : 8;
-  MachineFunction &MF = DAG.getMachineFunction();
-  ARMFunctionInfo *AFI = MF.getInfo<ARMFunctionInfo>();
-  unsigned ARMPCLabelIndex = AFI->createPICLabelUId();
-  ARMConstantPoolValue *CPV =
-    new ARMConstantPoolValue(GA->getGlobal(), ARMPCLabelIndex,
-                             ARMCP::CPValue, PCAdj, ARMCP::TLSGD, true);
-  SDValue Argument = DAG.getTargetConstantPool(CPV, PtrVT, 4);
-  Argument = DAG.getNode(ARMISD::Wrapper, dl, MVT::i32, Argument);
-  Argument = DAG.getLoad(PtrVT, dl, DAG.getEntryNode(), Argument,
-                         MachinePointerInfo::getConstantPool(),
-                         false, false, 0);
-  SDValue Chain = Argument.getValue(1);
+  // @LOCALMOD-BEGIN
+  SDValue Chain;
+  SDValue Argument;
 
-  SDValue PICLabel = DAG.getConstant(ARMPCLabelIndex, MVT::i32);
-  Argument = DAG.getNode(ARMISD::PIC_ADD, dl, PtrVT, Argument, PICLabel);
+  if (FlagSfiDisableCP) {
+    // With constant pools "disabled" (moved to rodata), this constant pool
+    // entry is no longer in text, and simultaneous PC relativeness
+    // and CP Addr relativeness is no longer expressible.
+    // So, instead of having:
+    //
+    // .LCPI12_0:
+    //   .long var(tlsgd)-((.LPC12_0+8) - .)
+    // ...
+    //    ldr r2, .LCPI12_0
+    // .LPC12_0:
+    //    add r0, pc, r2
+    //
+    // we have:
+    //
+    // .LCPI12_0:
+    //   .long var(tlsgd)
+    // ...
+    //    // get addr of .LCPI12_0 into r2
+    //    ldr r0, [r2]
+    //    add r0, r2, r0
+    // (1) No longer subtracting pc, so no longer adding that back
+    // (2) Not adding "." in the CP entry, so adding it via instructions.
+    //
+    unsigned char PCAdj = 0;
+    MachineFunction &MF = DAG.getMachineFunction();
+    ARMFunctionInfo *AFI = MF.getInfo<ARMFunctionInfo>();
+    unsigned ARMPCLabelIndex = AFI->createPICLabelUId();
+    ARMConstantPoolValue *CPV =
+        new ARMConstantPoolValue(GA->getGlobal(), ARMPCLabelIndex,
+                                 ARMCP::CPValue, PCAdj, ARMCP::TLSGD, false);
+    SDValue CPAddr = DAG.getTargetConstantPool(CPV, PtrVT, 4);
+    CPAddr = DAG.getNode(ARMISD::Wrapper, dl, MVT::i32, CPAddr);
+    Argument = DAG.getLoad(PtrVT, dl, DAG.getEntryNode(), CPAddr,
+                                   MachinePointerInfo::getConstantPool(),
+                                   false, false, 0);
+    Chain = Argument.getValue(1);
+    Argument = DAG.getNode(ISD::ADD, dl, PtrVT, Argument, CPAddr);
+  } else { // sort of @LOCALMOD-END
+    unsigned char PCAdj = Subtarget->isThumb() ? 4 : 8;
+    MachineFunction &MF = DAG.getMachineFunction();
+    ARMFunctionInfo *AFI = MF.getInfo<ARMFunctionInfo>();
+  unsigned ARMPCLabelIndex = AFI->createPICLabelUId();
+    ARMConstantPoolValue *CPV =
+        new ARMConstantPoolValue(GA->getGlobal(), ARMPCLabelIndex,
+                                 ARMCP::CPValue, PCAdj, ARMCP::TLSGD, true);
+    Argument = DAG.getTargetConstantPool(CPV, PtrVT, 4); // @ LOCALMOD
+    Argument = DAG.getNode(ARMISD::Wrapper, dl, MVT::i32, Argument);
+    Argument = DAG.getLoad(PtrVT, dl, DAG.getEntryNode(), Argument,
+                           MachinePointerInfo::getConstantPool(),
+                           false, false, 0);
+    Chain = Argument.getValue(1); // @LOCALMOD
+
+    SDValue PICLabel = DAG.getConstant(ARMPCLabelIndex, MVT::i32);
+    Argument = DAG.getNode(ARMISD::PIC_ADD, dl, PtrVT, Argument, PICLabel);
+  } // @LOCALMOD-END
 
   // call __tls_get_addr.
   ArgListTy Args;
@@ -1886,7 +1986,8 @@ ARMTargetLowering::LowerToTLSGeneralDynamicModel(GlobalAddressSDNode *GA,
 // "local exec" model.
 SDValue
 ARMTargetLowering::LowerToTLSExecModels(GlobalAddressSDNode *GA,
-                                        SelectionDAG &DAG) const {
+                                        SelectionDAG &DAG,
+                                        bool InitialExec) const { // @LOCALMOD
   const GlobalValue *GV = GA->getGlobal();
   DebugLoc dl = GA->getDebugLoc();
   SDValue Offset;
@@ -1895,28 +1996,52 @@ ARMTargetLowering::LowerToTLSExecModels(GlobalAddressSDNode *GA,
   // Get the Thread Pointer
   SDValue ThreadPointer = DAG.getNode(ARMISD::THREAD_POINTER, dl, PtrVT);
 
-  if (GV->isDeclaration()) {
+  if (InitialExec) {  // @LOCALMOD
     MachineFunction &MF = DAG.getMachineFunction();
     ARMFunctionInfo *AFI = MF.getInfo<ARMFunctionInfo>();
     unsigned ARMPCLabelIndex = AFI->createPICLabelUId();
-    // Initial exec model.
-    unsigned char PCAdj = Subtarget->isThumb() ? 4 : 8;
-    ARMConstantPoolValue *CPV =
-      new ARMConstantPoolValue(GA->getGlobal(), ARMPCLabelIndex,
-                               ARMCP::CPValue, PCAdj, ARMCP::GOTTPOFF, true);
-    Offset = DAG.getTargetConstantPool(CPV, PtrVT, 4);
-    Offset = DAG.getNode(ARMISD::Wrapper, dl, MVT::i32, Offset);
-    Offset = DAG.getLoad(PtrVT, dl, Chain, Offset,
-                         MachinePointerInfo::getConstantPool(),
-                         false, false, 0);
-    Chain = Offset.getValue(1);
 
-    SDValue PICLabel = DAG.getConstant(ARMPCLabelIndex, MVT::i32);
-    Offset = DAG.getNode(ARMISD::PIC_ADD, dl, PtrVT, Offset, PICLabel);
+    // @LOCALMOD-BEGIN
+    if (FlagSfiDisableCP) {
+      // Similar to change to LowerToTLSGeneralDynamicModel, and
+      // for the same reason.
+      unsigned char PCAdj = 0;
+      ARMConstantPoolValue *CPV =
+          new ARMConstantPoolValue(GA->getGlobal(), ARMPCLabelIndex,
+                                   ARMCP::CPValue, PCAdj, ARMCP::GOTTPOFF,
+                                   false);
+      SDValue CPAddr = DAG.getTargetConstantPool(CPV, PtrVT, 4);
+      CPAddr = DAG.getNode(ARMISD::Wrapper, dl, MVT::i32, CPAddr);
+      Offset = DAG.getLoad(PtrVT, dl, Chain, CPAddr,
+                           MachinePointerInfo::getConstantPool(),
+                           false, false, 0);
+      Chain = Offset.getValue(1);
 
-    Offset = DAG.getLoad(PtrVT, dl, Chain, Offset,
-                         MachinePointerInfo::getConstantPool(),
-                         false, false, 0);
+      Offset = DAG.getNode(ISD::ADD, dl, PtrVT, Offset, CPAddr);
+
+      Offset = DAG.getLoad(PtrVT, dl, Chain, Offset,
+                           MachinePointerInfo::getConstantPool(),
+                           false, false, 0);
+    } else { // sort of @LOCALMOD-END (indentation)
+      // Initial exec model.
+      unsigned char PCAdj = Subtarget->isThumb() ? 4 : 8;
+      ARMConstantPoolValue *CPV =
+          new ARMConstantPoolValue(GA->getGlobal(), ARMPCLabelIndex,
+                                   ARMCP::CPValue, PCAdj, ARMCP::GOTTPOFF, true);
+      Offset = DAG.getTargetConstantPool(CPV, PtrVT, 4);
+      Offset = DAG.getNode(ARMISD::Wrapper, dl, MVT::i32, Offset);
+      Offset = DAG.getLoad(PtrVT, dl, Chain, Offset,
+                           MachinePointerInfo::getConstantPool(),
+                           false, false, 0);
+      Chain = Offset.getValue(1);
+
+      SDValue PICLabel = DAG.getConstant(ARMPCLabelIndex, MVT::i32);
+      Offset = DAG.getNode(ARMISD::PIC_ADD, dl, PtrVT, Offset, PICLabel);
+
+      Offset = DAG.getLoad(PtrVT, dl, Chain, Offset,
+                           MachinePointerInfo::getConstantPool(),
+                           false, false, 0);
+    } // @LOCALMOD-END
   } else {
     // local exec model
     ARMConstantPoolValue *CPV = new ARMConstantPoolValue(GV, ARMCP::TPOFF);
@@ -1940,10 +2065,20 @@ ARMTargetLowering::LowerGlobalTLSAddress(SDValue Op, SelectionDAG &DAG) const {
   GlobalAddressSDNode *GA = cast<GlobalAddressSDNode>(Op);
   // If the relocation model is PIC, use the "General Dynamic" TLS Model,
   // otherwise use the "Local Exec" TLS Model
-  if (getTargetMachine().getRelocationModel() == Reloc::PIC_)
-    return LowerToTLSGeneralDynamicModel(GA, DAG);
-  else
-    return LowerToTLSExecModels(GA, DAG);
+  // @LOCALMOD-BEGIN NaCl is testing with Initial Exec for now.
+  // This supports DSOs that are known at startup, but not those
+  // that may or may not be loaded through dlopen.
+  // Must wait for ARM Glibc port.
+  if (getTargetMachine().getRelocationModel() == Reloc::PIC_) {
+    if (ARMStaticTLS)
+      return LowerToTLSExecModels(GA, DAG, true);
+    else
+      return LowerToTLSGeneralDynamicModel(GA, DAG);
+  } else {
+    const GlobalValue *GV = GA->getGlobal();
+    return LowerToTLSExecModels(GA, DAG, GV->isDeclaration());
+  } //@LOCALMOD-END
+
 }
 
 SDValue ARMTargetLowering::LowerGlobalAddressELF(SDValue Op,
@@ -2054,17 +2189,55 @@ SDValue ARMTargetLowering::LowerGLOBAL_OFFSET_TABLE(SDValue Op,
   unsigned ARMPCLabelIndex = AFI->createPICLabelUId();
   EVT PtrVT = getPointerTy();
   DebugLoc dl = Op.getDebugLoc();
-  unsigned PCAdj = Subtarget->isThumb() ? 4 : 8;
-  ARMConstantPoolValue *CPV = new ARMConstantPoolValue(*DAG.getContext(),
-                                                       "_GLOBAL_OFFSET_TABLE_",
-                                                       ARMPCLabelIndex, PCAdj);
-  SDValue CPAddr = DAG.getTargetConstantPool(CPV, PtrVT, 4);
-  CPAddr = DAG.getNode(ARMISD::Wrapper, dl, MVT::i32, CPAddr);
-  SDValue Result = DAG.getLoad(PtrVT, dl, DAG.getEntryNode(), CPAddr,
-                               MachinePointerInfo::getConstantPool(),
-                               false, false, 0);
-  SDValue PICLabel = DAG.getConstant(ARMPCLabelIndex, MVT::i32);
-  return DAG.getNode(ARMISD::PIC_ADD, dl, PtrVT, Result, PICLabel);
+
+  // @LOCALMOD-BEGIN
+  if (FlagSfiDisableCP) {
+    // With constant pools "disabled" (moved to rodata), the constant pool
+    // entry is no longer in text, and the PC relativeness is
+    // no longer expressible.
+    //
+    // Instead of having:
+    //
+    // .LCPI12_0:
+    //   .long _GLOBAL_OFFSET_TABLE_-(.LPC12_0+8)
+    // ...
+    //    ldr r2, .LCPI12_0
+    // .LPC12_0:
+    //    add r0, pc, r2
+    //
+    // Things to try:
+    // (1) get the address of the GOT through a pc-relative MOVW / MOVT.
+    //
+    //    movw r0, :lower16:_GLOBAL_OFFSET_TABLE_ - (.LPC12_0 + 8)
+    //    movt r0, :upper16:_GLOBAL_OFFSET_TABLE_ - (.LPC12_0 + 8)
+    // .LPC12_0:
+    //    add r0, pc, r0
+    //
+    // (2) Make the constant pool entry relative to its own location
+    //
+    // .LCPI12_0:
+    //   .long _GLOBAL_OFFSET_TABLE_-.
+    // ...
+    //    // get address of LCPI12_0 into r0 (possibly 3 instructions for PIC)
+    //    ldr r1, [r0]
+    //    add r1, r0, r1
+    //
+    // We will try (1) for now, since (2) takes about 3 more instructions
+    // (and one of them is a load).
+    return DAG.getNode(ARMISD::WrapperGOT, dl, MVT::i32);
+  } else { // Sort of LOCALMOD-END (indentation only
+    unsigned PCAdj = Subtarget->isThumb() ? 4 : 8;
+    ARMConstantPoolValue *CPV = new ARMConstantPoolValue(*DAG.getContext(),
+                                                         "_GLOBAL_OFFSET_TABLE_",
+                                                         ARMPCLabelIndex, PCAdj);
+    SDValue CPAddr = DAG.getTargetConstantPool(CPV, PtrVT, 4);
+    CPAddr = DAG.getNode(ARMISD::Wrapper, dl, MVT::i32, CPAddr);
+    SDValue Result = DAG.getLoad(PtrVT, dl, DAG.getEntryNode(), CPAddr,
+                                 MachinePointerInfo::getConstantPool(),
+                                 false, false, 0);
+    SDValue PICLabel = DAG.getConstant(ARMPCLabelIndex, MVT::i32);
+    return DAG.getNode(ARMISD::PIC_ADD, dl, PtrVT, Result, PICLabel);
+  } // @LOCALMOD-END
 }
 
 SDValue
@@ -4232,12 +4405,33 @@ static SDValue LowerMUL(SDValue Op, SelectionDAG &DAG) {
   return DAG.getNode(NewOpc, DL, VT, Op0, Op1);
 }
 
+// @LOCALMOD-START
+// An EH_RETURN is the result of lowering llvm.eh.return.i32 which in turn is
+// generated from __builtin_eh_return (offset, handler)
+// The effect of this is to adjust the stack pointer by "offset"
+// and then branch to "handler".
+SDValue ARMTargetLowering::LowerEH_RETURN(SDValue Op, SelectionDAG &DAG)
+  const {
+  SDValue Chain     = Op.getOperand(0);
+  SDValue Offset    = Op.getOperand(1);
+  SDValue Handler   = Op.getOperand(2);
+  DebugLoc dl       = Op.getDebugLoc();
+
+  return DAG.getNode(ARMISD::EH_RETURN, dl,
+                     MVT::Other,
+                     Chain,
+                     Offset,
+                     Handler);
+}
+// @LOCALMOD-END
+
 SDValue ARMTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
   switch (Op.getOpcode()) {
   default: llvm_unreachable("Don't know how to custom lower this!");
   case ISD::ConstantPool:  return LowerConstantPool(Op, DAG);
   case ISD::BlockAddress:  return LowerBlockAddress(Op, DAG);
-  case ISD::GlobalAddress:
+  case ISD::JumpTable:    return LowerJumpTable(Op, DAG); // @LOCALMOD
+   case ISD::GlobalAddress:
     return Subtarget->isTargetDarwin() ? LowerGlobalAddressDarwin(Op, DAG) :
       LowerGlobalAddressELF(Op, DAG);
   case ISD::GlobalTLSAddress:   return LowerGlobalTLSAddress(Op, DAG);
@@ -4255,6 +4449,17 @@ SDValue ARMTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
   case ISD::FCOPYSIGN:     return LowerFCOPYSIGN(Op, DAG);
   case ISD::RETURNADDR:    return LowerRETURNADDR(Op, DAG);
   case ISD::FRAMEADDR:     return LowerFRAMEADDR(Op, DAG);
+  // @LOCALMOD-START
+  // The exact semantics of this ISD are not completely clear.
+  // LLVM seems to always point the fp after the push ra and the old fp, i.e.
+  // two register slots after the beginning of the stack frame.
+  // It is not clear what happens when there is no frame pointer but
+  // but llvm unlike gcc seems to always force one when this node is
+  // encountered.
+  case ISD::FRAME_TO_ARGS_OFFSET: return DAG.getIntPtrConstant(2*4);
+  case ISD::EH_RETURN:            return LowerEH_RETURN(Op, DAG);
+  // @LOCALMOD-END
+   
   case ISD::GLOBAL_OFFSET_TABLE: return LowerGLOBAL_OFFSET_TABLE(Op, DAG);
   case ISD::EH_SJLJ_SETJMP: return LowerEH_SJLJ_SETJMP(Op, DAG);
   case ISD::EH_SJLJ_LONGJMP: return LowerEH_SJLJ_LONGJMP(Op, DAG);
@@ -6037,6 +6242,13 @@ ARMTargetLowering::getPreIndexedAddressParts(SDNode *N, SDValue &Base,
   if (Subtarget->isThumb1Only())
     return false;
 
+  // @LOCAMOD-START
+  // NOTE: THIS IS A LITTLE DRASTIC
+  if (FlagSfiStore && N->getOpcode() == ISD::STORE) {
+    return false;
+  }
+  // @LOCAMOD-END
+
   EVT VT;
   SDValue Ptr;
   bool isSEXTLoad = false;
@@ -6075,7 +6287,12 @@ bool ARMTargetLowering::getPostIndexedAddressParts(SDNode *N, SDNode *Op,
                                                    SelectionDAG &DAG) const {
   if (Subtarget->isThumb1Only())
     return false;
-
+   // @LOCALMOD-START
+  // THIS IS A LITTLE DRASTIC
+  if (FlagSfiStore && N->getOpcode() == ISD::STORE) {
+    return false;
+  }
+  // @LOCALMOD-END
   EVT VT;
   SDValue Ptr;
   bool isSEXTLoad = false;

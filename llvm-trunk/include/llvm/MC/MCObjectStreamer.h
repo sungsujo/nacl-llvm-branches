@@ -61,6 +61,14 @@ public:
   virtual void EmitLabel(MCSymbol *Symbol);
   virtual void EmitValueImpl(const MCExpr *Value, unsigned Size,
                              bool isPCRel, unsigned AddrSpace);
+                             
+  // @LOCALMOD-BEGIN
+  void EmitBundleLock();
+  void EmitBundleUnlock();
+  void EmitBundleAlignStart();
+  void EmitBundleAlignEnd();
+  // @LOCALMOD-END
+
   virtual void EmitULEB128Value(const MCExpr *Value, unsigned AddrSpace = 0);
   virtual void EmitSLEB128Value(const MCExpr *Value, unsigned AddrSpace = 0);
   virtual void EmitWeakReference(MCSymbol *Alias, const MCSymbol *Symbol);

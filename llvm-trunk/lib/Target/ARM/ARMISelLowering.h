@@ -39,7 +39,11 @@ namespace llvm {
       WrapperPIC,   // WrapperPIC - A wrapper node for TargetGlobalAddress in
                     // PIC mode.
       WrapperJT,    // WrapperJT - A wrapper node for TargetJumpTable
-
+      // @LOCALMOD-START
+      WrapperJT2,   // like WrapperJT but without the UID
+      WrapperGOT,   // A Wrapper node for GOT addresses
+      EH_RETURN,    // For LowerEH_RETURN
+      // @LOCALMOD-START
       CALL,         // Function call.
       CALL_PRED,    // Function call that's predicable.
       CALL_NOLINK,  // Function call with branch not branch-and-link.
@@ -371,8 +375,14 @@ namespace llvm {
     SDValue LowerGlobalTLSAddress(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerToTLSGeneralDynamicModel(GlobalAddressSDNode *GA,
                                             SelectionDAG &DAG) const;
+    // @LOCALMOD-START
     SDValue LowerToTLSExecModels(GlobalAddressSDNode *GA,
-                                   SelectionDAG &DAG) const;
+                                 SelectionDAG &DAG,
+                                 bool InitialExec) const;
+    SDValue LowerJumpTable(SDValue Op, SelectionDAG &DAG) const;
+    SDValue LowerEH_RETURN(SDValue Op, SelectionDAG &DAG) const;
+    // @LOCALMOD-END
+
     SDValue LowerGLOBAL_OFFSET_TABLE(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerBR_JT(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerSELECT(SDValue Op, SelectionDAG &DAG) const;

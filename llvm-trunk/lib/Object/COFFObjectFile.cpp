@@ -255,7 +255,7 @@ StringRef COFFObjectFile::getSectionName(DataRefImpl Sec) const {
 
   // Check for string table entry. First byte is '/'.
   if (name[0] == '/') {
-    uint32_t Offset;
+    unsigned long long Offset; /* @LOCALMOD */
     name.getAsInteger(10, Offset);
     return StringRef(getString(Offset));
   }
